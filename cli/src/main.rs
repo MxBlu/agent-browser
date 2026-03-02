@@ -31,6 +31,15 @@ use std::process::Command as ProcessCommand;
 fn run_auth_cli(cmd: &serde_json::Value, json_mode: bool) -> ! {
     let exe_path = env::current_exe().unwrap_or_default();
     let exe_path = exe_path.canonicalize().unwrap_or(exe_path);
+    #[cfg(windows)]
+    let exe_path = {
+        let p = exe_path.to_string_lossy();
+        if let Some(stripped) = p.strip_prefix(r"\\?\") {
+            PathBuf::from(stripped)
+        } else {
+            exe_path
+        }
+    };
     let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new("."));
 
     let mut script_paths = vec![
