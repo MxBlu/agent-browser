@@ -187,16 +187,17 @@ struct EncryptedPayload {
     data: String,
 }
 
-fn is_json_payload(data: &[u8]) -> bool {
-    data.first() == Some(&b'{')
-}
+fn decrypt_profile(data: &[u8]) -> Result<AuthProfile, String> {
+    let key = get_encryption_key()?;
 
-/// Decrypt a profile from the JSON+base64 format used by Node.js.
-fn decrypt_json_payload(data: &[u8], key: &[u8]) -> Result<AuthProfile, String> {
-    let text =
-        std::str::from_utf8(data).map_err(|e| format!("Profile is not valid UTF-8: {}", e))?;
-    let payload: EncryptedPayload =
-        serde_json::from_str(text).map_err(|e| format!("Invalid encrypted payload: {}", e))?;
+    let text = std::str::from_utf8(data).map_err(|_| {
+        "Profile is not a valid encrypted payload -- it may use an older incompatible format"
+            .to_string()
+    })?;
+    let payload: EncryptedPayload = serde_json::from_str(text).map_err(|_| {
+        "Profile is not a valid encrypted payload -- it may use an older incompatible format"
+            .to_string()
+    })?;
 
     let iv = STANDARD
         .decode(&payload.iv)
@@ -214,7 +215,7 @@ fn decrypt_json_payload(data: &[u8], key: &[u8]) -> Result<AuthProfile, String> 
     combined.extend_from_slice(&auth_tag);
 
     let cipher =
-        Aes256Gcm::new_from_slice(key).map_err(|e| format!("Decryption key error: {}", e))?;
+        Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Decryption key error: {}", e))?;
     let plaintext = cipher
         .decrypt(aes_gcm::Nonce::from_slice(&iv), combined.as_slice())
         .map_err(|e| format!("Decryption failed: {}", e))?;
@@ -222,33 +223,6 @@ fn decrypt_json_payload(data: &[u8], key: &[u8]) -> Result<AuthProfile, String> 
     let json_str = String::from_utf8(plaintext)
         .map_err(|e| format!("Decrypted data is not valid UTF-8: {}", e))?;
     serde_json::from_str(&json_str).map_err(|e| format!("Invalid profile data: {}", e))
-}
-
-/// Decrypt a profile from the legacy binary format (12-byte nonce || ciphertext+tag).
-fn decrypt_binary_payload(data: &[u8], key: &[u8]) -> Result<AuthProfile, String> {
-    if data.len() < 13 {
-        return Err("Encrypted data too short".to_string());
-    }
-    let (nonce_bytes, ciphertext) = data.split_at(12);
-
-    let cipher =
-        Aes256Gcm::new_from_slice(key).map_err(|e| format!("Decryption key error: {}", e))?;
-    let plaintext = cipher
-        .decrypt(aes_gcm::Nonce::from_slice(nonce_bytes), ciphertext)
-        .map_err(|e| format!("Decryption failed: {}", e))?;
-
-    let json_str = String::from_utf8(plaintext)
-        .map_err(|e| format!("Decrypted data is not valid UTF-8: {}", e))?;
-    serde_json::from_str(&json_str).map_err(|e| format!("Invalid profile data: {}", e))
-}
-
-fn decrypt_profile(data: &[u8]) -> Result<AuthProfile, String> {
-    let key = get_encryption_key()?;
-    if is_json_payload(data) {
-        decrypt_json_payload(data, &key)
-    } else {
-        decrypt_binary_payload(data, &key)
-    }
 }
 
 fn save_profile(profile: &AuthProfile) -> Result<(), String> {
@@ -411,11 +385,13 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         let original = std::env::var(ENCRYPTION_KEY_ENV).ok();
         let test_key = "a".repeat(64);
-        std::env::set_var(ENCRYPTION_KEY_ENV, &test_key);
+        // SAFETY: TEST_MUTEX serializes all test access so no concurrent mutation.
+        unsafe { std::env::set_var(ENCRYPTION_KEY_ENV, &test_key) };
         f();
+        // SAFETY: TEST_MUTEX serializes all test access so no concurrent mutation.
         match original {
-            Some(val) => std::env::set_var(ENCRYPTION_KEY_ENV, val),
-            None => std::env::remove_var(ENCRYPTION_KEY_ENV),
+            Some(val) => unsafe { std::env::set_var(ENCRYPTION_KEY_ENV, val) },
+            None => unsafe { std::env::remove_var(ENCRYPTION_KEY_ENV) },
         }
     }
 
@@ -533,38 +509,6 @@ mod tests {
             assert_eq!(decrypted.name, "json-test");
             assert_eq!(decrypted.password, "hunter2");
             assert_eq!(decrypted.username_selector, Some("#email".to_string()));
-        });
-    }
-
-    #[test]
-    fn test_decrypt_binary_payload_format() {
-        with_test_key(|| {
-            let key = get_encryption_key().unwrap();
-            let profile = AuthProfile {
-                name: "binary-test".to_string(),
-                url: "https://example.com".to_string(),
-                username: "user".to_string(),
-                password: "pass".to_string(),
-                username_selector: None,
-                password_selector: None,
-                submit_selector: None,
-            };
-
-            let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
-            let mut nonce = [0u8; 12];
-            getrandom::getrandom(&mut nonce).unwrap();
-            let plaintext = serde_json::to_string(&profile).unwrap();
-            let ciphertext = cipher
-                .encrypt(aes_gcm::Nonce::from_slice(&nonce), plaintext.as_bytes())
-                .unwrap();
-
-            let mut data = Vec::new();
-            data.extend_from_slice(&nonce);
-            data.extend_from_slice(&ciphertext);
-
-            let decrypted = decrypt_profile(&data).unwrap();
-            assert_eq!(decrypted.name, "binary-test");
-            assert_eq!(decrypted.password, "pass");
         });
     }
 
