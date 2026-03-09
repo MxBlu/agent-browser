@@ -778,6 +778,74 @@ async fn e2e_wait() {
 }
 
 // ---------------------------------------------------------------------------
+// Viewport with deviceScaleFactor (retina)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore]
+async fn e2e_viewport_scale_factor() {
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": "about:blank" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    // Default devicePixelRatio should be 1
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "evaluate", "script": "window.devicePixelRatio" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let default_dpr = get_data(&resp)["result"].as_f64().unwrap();
+    assert_eq!(default_dpr, 1.0, "Default devicePixelRatio should be 1");
+
+    // Set viewport with 2x scale factor
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "viewport", "width": 1920, "height": 1080, "deviceScaleFactor": 2.0 }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["width"], 1920);
+    assert_eq!(get_data(&resp)["height"], 1080);
+    assert_eq!(get_data(&resp)["deviceScaleFactor"], 2.0);
+
+    // devicePixelRatio should now be 2
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "evaluate", "script": "window.devicePixelRatio" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let new_dpr = get_data(&resp)["result"].as_f64().unwrap();
+    assert_eq!(new_dpr, 2.0, "devicePixelRatio should be 2 after setting scale factor");
+
+    // CSS viewport width should still be 1920 (not 3840)
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "evaluate", "script": "window.innerWidth" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let css_width = get_data(&resp)["result"].as_i64().unwrap();
+    assert_eq!(css_width, 1920, "CSS width should remain 1920 at 2x scale");
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+// ---------------------------------------------------------------------------
 // Viewport and emulation
 // ---------------------------------------------------------------------------
 

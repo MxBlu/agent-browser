@@ -1465,9 +1465,8 @@ async function handleViewport(
   command: ViewportCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  await browser.setViewport(command.width, command.height);
-
   if (command.deviceScaleFactor && command.deviceScaleFactor !== 1) {
+    await browser.setViewport(command.width, command.height);
     await browser.setDeviceScaleFactor(
       command.deviceScaleFactor,
       command.width,
@@ -1480,6 +1479,8 @@ async function handleViewport(
     } catch {
       // Ignore if override was never set
     }
+    await browser.setViewport(command.width, command.height);
+  } else {
     await browser.setViewport(command.width, command.height);
   }
 
