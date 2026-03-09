@@ -479,7 +479,7 @@ export default function Home() {
               )}
             </button>
             <a
-              href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fagent-browser%2Fagent-browser%2Ftree%2Fmain%2Fexamples%2Fenvironments&project-name=agent-browser-environments&repository-name=agent-browser-environments"
+              href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel-labs%2Fagent-browser%2Ftree%2Fmain%2Fexamples%2Fenvironments&project-name=agent-browser-environments&repository-name=agent-browser-environments"
               target="_blank"
               rel="noopener noreferrer"
             >
