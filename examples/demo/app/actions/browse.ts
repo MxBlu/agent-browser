@@ -1,7 +1,31 @@
 "use server";
 
+import { headers } from "next/headers";
 import * as serverless from "@/lib/agent-browser";
 import * as sandbox from "@/lib/agent-browser-sandbox";
+import { ALLOWED_URLS } from "@/lib/constants";
+import { minuteRateLimit, dailyRateLimit } from "@/lib/rate-limit";
+
+async function checkRateLimit(): Promise<string | null> {
+  const h = await headers();
+  const ip = h.get("x-forwarded-for")?.split(",")[0] ?? "anonymous";
+
+  const minute = await minuteRateLimit.limit(ip);
+  if (!minute.success) {
+    return "Too many requests. Please wait a moment before trying again.";
+  }
+
+  const daily = await dailyRateLimit.limit(ip);
+  if (!daily.success) {
+    return "Daily limit reached. Please try again tomorrow.";
+  }
+
+  return null;
+}
+
+function isAllowedUrl(url: string): boolean {
+  return (ALLOWED_URLS as readonly string[]).includes(url);
+}
 
 export type EnvStatus = {
   serverless: {
@@ -52,6 +76,15 @@ export async function takeScreenshot(
   url: string,
   mode: Mode = "serverless",
 ): Promise<ScreenshotResult> {
+  if (!isAllowedUrl(url)) {
+    return { ok: false, error: "URL not allowed" };
+  }
+
+  const rateLimitError = await checkRateLimit();
+  if (rateLimitError) {
+    return { ok: false, error: rateLimitError };
+  }
+
   try {
     if (mode === "sandbox") {
       const { screenshot, title } = await sandbox.screenshotUrl(url);
@@ -78,6 +111,15 @@ export async function takeSnapshot(
   url: string,
   mode: Mode = "serverless",
 ): Promise<SnapshotResult> {
+  if (!isAllowedUrl(url)) {
+    return { ok: false, error: "URL not allowed" };
+  }
+
+  const rateLimitError = await checkRateLimit();
+  if (rateLimitError) {
+    return { ok: false, error: rateLimitError };
+  }
+
   try {
     if (mode === "sandbox") {
       const { snapshot, title } = await sandbox.snapshotUrl(url, {

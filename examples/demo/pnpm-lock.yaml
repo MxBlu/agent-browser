@@ -17,6 +17,12 @@ importers:
       '@tailwindcss/postcss':
         specifier: ^4.2.1
         version: 4.2.1
+      '@upstash/ratelimit':
+        specifier: ^2.0.8
+        version: 2.0.8(@upstash/redis@1.36.4)
+      '@upstash/redis':
+        specifier: ^1.36.4
+        version: 1.36.4
       '@vercel/sandbox':
         specifier: ^1.0.0
         version: 1.8.0
@@ -692,6 +698,18 @@ packages:
 
   '@types/yauzl@2.10.3':
     resolution: {integrity: sha512-oJoftv0LSuaDZE3Le4DbKX+KS9G36NzOeSap90UIK0yMA/NhKJhqlSGtNDORNRaIbQfzjXDrQa0ytJ6mNRGz/Q==}
+
+  '@upstash/core-analytics@0.0.10':
+    resolution: {integrity: sha512-7qJHGxpQgQr9/vmeS1PktEwvNAF7TI4iJDi8Pu2CFZ9YUGHZH4fOP5TfYlZ4aVxfopnELiE4BS4FBjyK7V1/xQ==}
+    engines: {node: '>=16.0.0'}
+
+  '@upstash/ratelimit@2.0.8':
+    resolution: {integrity: sha512-YSTMBJ1YIxsoPkUMX/P4DDks/xV5YYCswWMamU8ZIfK9ly6ppjRnVOyBhMDXBmzjODm4UQKcxsJPvaeFAijp5w==}
+    peerDependencies:
+      '@upstash/redis': ^1.34.3
+
+  '@upstash/redis@1.36.4':
+    resolution: {integrity: sha512-w4s/msmyMqxOxaVhC8TQ2whJ77+Zd8YaSFokXL4mULQopaYb4xNJcm/PedtFQyLJn65nneySw9IwYnlMBBmFHg==}
 
   '@vercel/oidc@3.2.0':
     resolution: {integrity: sha512-UycprH3T6n3jH0k44NHMa7pnFHGu/N05MjojYr+Mc6I7obkoLIJujSWwin1pCvdy/eOxrI/l3uDLQsmcrOb4ug==}
@@ -2122,6 +2140,9 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
+  uncrypto@0.1.3:
+    resolution: {integrity: sha512-Ql87qFHB3s/De2ClA9e0gsnS6zXG27SkTiSJwjCc9MebbfapQfuPzumMIUMi38ezPZVNFcHI9sUIepeQfw8J8Q==}
+
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
@@ -2877,6 +2898,19 @@ snapshots:
     dependencies:
       '@types/node': 22.19.15
     optional: true
+
+  '@upstash/core-analytics@0.0.10':
+    dependencies:
+      '@upstash/redis': 1.36.4
+
+  '@upstash/ratelimit@2.0.8(@upstash/redis@1.36.4)':
+    dependencies:
+      '@upstash/core-analytics': 0.0.10
+      '@upstash/redis': 1.36.4
+
+  '@upstash/redis@1.36.4':
+    dependencies:
+      uncrypto: 0.1.3
 
   '@vercel/oidc@3.2.0': {}
 
@@ -4309,6 +4343,8 @@ snapshots:
   typed-query-selector@2.12.1: {}
 
   typescript@5.9.3: {}
+
+  uncrypto@0.1.3: {}
 
   undici-types@6.21.0: {}
 

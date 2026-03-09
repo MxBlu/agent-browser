@@ -13,8 +13,8 @@ import {
   ResizablePanel,
   ResizableHandle,
 } from "@/components/ui/resizable";
+import { ALLOWED_URLS } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
@@ -179,7 +179,7 @@ function ModeCard({
 
 export default function Home() {
   const isMobile = useIsMobile();
-  const [url, setUrl] = useState("https://example.com");
+  const [url, setUrl] = useState<string>(ALLOWED_URLS[0]);
   const [loading, setLoading] = useState(false);
   const [action, setAction] = useState<Action>("screenshot");
   const [mode, setMode] = useState<Mode>("serverless");
@@ -238,22 +238,26 @@ export default function Home() {
     <form onSubmit={handleSubmit} className="p-5 space-y-5">
       <div className="space-y-1.5">
         <Label
-          htmlFor="url-input"
+          htmlFor="url-select"
           className="text-[11px] text-muted-foreground uppercase tracking-wider"
         >
           URL
         </Label>
-        <Input
-          id="url-input"
-          type="url"
+        <select
+          id="url-select"
           value={url}
           onChange={(e) => {
             setUrl(e.target.value);
             clearResults();
           }}
-          placeholder="https://example.com"
-          required
-        />
+          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          {ALLOWED_URLS.map((u) => (
+            <option key={u} value={u}>
+              {u.replace("https://", "")}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="space-y-1.5">
