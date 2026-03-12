@@ -64,18 +64,22 @@ impl CdpClient {
                     Err(_) => break,
                 };
 
+                // Broadcast raw message for inspect proxy subscribers before typed parse,
+                // so messages with negative IDs (used by the inspect proxy) are still delivered.
+                if raw_tx_clone.receiver_count() > 0 {
+                    let session_id = serde_json::from_str::<serde_json::Value>(&msg)
+                        .ok()
+                        .and_then(|v| v.get("sessionId")?.as_str().map(String::from));
+                    let _ = raw_tx_clone.send(RawCdpMessage {
+                        text: msg.clone(),
+                        session_id,
+                    });
+                }
+
                 let parsed: CdpMessage = match serde_json::from_str(&msg) {
                     Ok(m) => m,
                     Err(_) => continue,
                 };
-
-                // Broadcast raw message for inspect proxy subscribers (skip clone when idle)
-                if raw_tx_clone.receiver_count() > 0 {
-                    let _ = raw_tx_clone.send(RawCdpMessage {
-                        text: msg.clone(),
-                        session_id: parsed.session_id.clone(),
-                    });
-                }
 
                 if let Some(id) = parsed.id {
                     // Response to a command
