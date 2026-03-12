@@ -2418,11 +2418,19 @@ Snapshot Options:
   -d, --depth <n>            Limit tree depth
   -s, --selector <sel>       Scope to CSS selector
 
+Authentication:
+  --profile <path>           Persist login sessions across restarts (cookies, IndexedDB, cache)
+                             (or AGENT_BROWSER_PROFILE env)
+  --session-name <name>      Auto-save/restore cookies and localStorage by name
+                             (or AGENT_BROWSER_SESSION_NAME env)
+  --state <path>             Load saved auth state (cookies + storage) from JSON file
+                             (or AGENT_BROWSER_STATE env)
+  --auto-connect             Connect to a running Chrome to reuse its auth state
+                             Tip: agent-browser --auto-connect state save ./auth.json
+  --headers <json>           HTTP headers scoped to URL's origin (e.g., Authorization bearer token)
+
 Options:
   --session <name>           Isolated session (or AGENT_BROWSER_SESSION env)
-  --profile <path>           Persistent browser profile (or AGENT_BROWSER_PROFILE env)
-  --state <path>             Load storage state from JSON file (or AGENT_BROWSER_STATE env)
-  --headers <json>           HTTP headers scoped to URL's origin (for auth)
   --executable-path <path>   Custom browser executable (or AGENT_BROWSER_EXECUTABLE_PATH)
   --extension <path>         Load browser extensions (repeatable)
   --args <args>              Browser launch args, comma or newline separated (or AGENT_BROWSER_ARGS)
@@ -2441,10 +2449,8 @@ Options:
   --annotate                 Annotated screenshot with numbered labels and legend
   --headed                   Show browser window (not headless) (or AGENT_BROWSER_HEADED env)
   --cdp <port>               Connect via CDP (Chrome DevTools Protocol)
-  --auto-connect             Auto-discover and connect to running Chrome
   --color-scheme <scheme>    Color scheme: dark, light, no-preference (or AGENT_BROWSER_COLOR_SCHEME)
   --download-path <path>     Default download directory (or AGENT_BROWSER_DOWNLOAD_PATH)
-  --session-name <name>      Auto-save/restore session state (cookies, localStorage)
   --content-boundaries       Wrap page output in boundary markers (or AGENT_BROWSER_CONTENT_BOUNDARIES)
   --max-output <chars>       Truncate page output to N chars (or AGENT_BROWSER_MAX_OUTPUT)
   --allowed-domains <list>   Restrict navigation domains (or AGENT_BROWSER_ALLOWED_DOMAINS)

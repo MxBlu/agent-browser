@@ -308,6 +308,43 @@ agent-browser install                 # Download Chromium browser
 agent-browser install --with-deps     # Also install system deps (Linux)
 ```
 
+## Authentication
+
+agent-browser provides multiple ways to persist login sessions so you don't re-authenticate every run.
+
+### Quick summary
+
+| Approach | Best for | Flag / Env |
+|----------|----------|------------|
+| **Persistent profile** | Full browser state (cookies, IndexedDB, service workers, cache) across restarts | `--profile <path>` / `AGENT_BROWSER_PROFILE` |
+| **Session persistence** | Auto-save/restore cookies + localStorage by name | `--session-name <name>` / `AGENT_BROWSER_SESSION_NAME` |
+| **Import from your browser** | Grab auth from a Chrome session you already logged into | `--auto-connect` + `state save` |
+| **State file** | Load a previously saved state JSON on launch | `--state <path>` / `AGENT_BROWSER_STATE` |
+| **Auth vault** | Store credentials locally (encrypted), login by name | `auth save` / `auth login` |
+
+### Import auth from your browser
+
+If you are already logged in to a site in Chrome, you can grab that auth state and reuse it:
+
+```bash
+# 1. Launch Chrome with remote debugging enabled
+#    macOS:
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=9222
+#    Or use --auto-connect to discover an already-running Chrome
+
+# 2. Connect and save the authenticated state
+agent-browser --auto-connect state save ./my-auth.json
+
+# 3. Use the saved auth in future sessions
+agent-browser --state ./my-auth.json open https://app.example.com/dashboard
+
+# 4. Or use --session-name for automatic persistence
+agent-browser --session-name myapp state load ./my-auth.json
+# From now on, --session-name myapp auto-saves/restores this state
+```
+
+For full details on login flows, OAuth, 2FA, cookie-based auth, and the auth vault, see the [Authentication](docs/src/app/sessions/page.mdx) docs.
+
 ## Sessions
 
 Run multiple isolated browser instances:
