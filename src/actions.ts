@@ -431,6 +431,10 @@ async function dispatchAction(command: Command, browser: BrowserManager): Promis
       return await handleReload(command, browser);
     case 'url':
       return await handleUrl(command, browser);
+    case 'cdp_url':
+      return handleCdpUrl(command, browser);
+    case 'inspect':
+      return await handleInspect(command, browser);
     case 'title':
       return await handleTitle(command, browser);
     case 'getattribute':
@@ -1575,6 +1579,75 @@ async function handleUrl(
 ): Promise<Response> {
   const page = browser.getPage();
   return successResponse(command.id, { url: page.url() });
+}
+
+function handleCdpUrl(command: Command & { action: 'cdp_url' }, browser: BrowserManager): Response {
+  const cdpUrl = browser.getCdpUrl();
+  if (!cdpUrl) {
+    return { id: command.id, error: 'CDP URL not available (browser may not be launched)' };
+  }
+  return successResponse(command.id, { cdpUrl });
+}
+
+let inspectServerInstance: import('./inspect-server.js').InspectServer | null = null;
+
+async function handleInspect(
+  command: Command & { action: 'inspect' },
+  browser: BrowserManager
+): Promise<Response> {
+  const cdpUrl = browser.getCdpUrl();
+  if (!cdpUrl) {
+    return { id: command.id, error: 'CDP URL not available (browser may not be launched)' };
+  }
+
+  if (inspectServerInstance) {
+    const url = `http://127.0.0.1:${inspectServerInstance.port}`;
+    openUrlInBrowser(url);
+    return successResponse(command.id, { opened: true, url });
+  }
+
+  const stripped = cdpUrl.replace(/^wss?:\/\//, '');
+  const hostPort = stripped.split('/')[0];
+
+  // Get the target ID so the inspect server can create its own dedicated CDP session
+  const page = browser.getPage();
+  const context = page.context();
+  const tmpCdp = await context.newCDPSession(page);
+  let targetId = '';
+  try {
+    const info: any = await tmpCdp.send('Target.getTargetInfo' as any);
+    targetId = info?.targetInfo?.targetId || '';
+  } catch {}
+  await tmpCdp.detach();
+
+  if (!targetId) {
+    return { id: command.id, error: 'Could not determine target ID for active page' };
+  }
+
+  const { InspectServer } = await import('./inspect-server.js');
+  const server = new InspectServer({
+    chromeHostPort: hostPort,
+    targetId,
+    chromeWsUrl: cdpUrl,
+  });
+  await server.start();
+  inspectServerInstance = server;
+
+  const url = `http://127.0.0.1:${server.port}`;
+  openUrlInBrowser(url);
+  return successResponse(command.id, { opened: true, url });
+}
+
+function openUrlInBrowser(url: string): void {
+  const { exec } = require('child_process') as typeof import('child_process');
+  const platform = process.platform;
+  const cmd =
+    platform === 'darwin'
+      ? `open "${url}"`
+      : platform === 'win32'
+        ? `start "" "${url}"`
+        : `xdg-open "${url}"`;
+  exec(cmd);
 }
 
 async function handleTitle(

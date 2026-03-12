@@ -161,6 +161,7 @@ impl BrowserProcess {
 pub struct BrowserManager {
     pub client: CdpClient,
     browser_process: Option<BrowserProcess>,
+    ws_url: String,
     pages: Vec<PageInfo>,
     active_page_index: usize,
     default_timeout_ms: u64,
@@ -223,6 +224,7 @@ impl BrowserManager {
         let mut manager = Self {
             client,
             browser_process: Some(process),
+            ws_url,
             pages: Vec::new(),
             active_page_index: 0,
             default_timeout_ms: 25_000,
@@ -285,6 +287,7 @@ impl BrowserManager {
         let mut manager = Self {
             client,
             browser_process: None,
+            ws_url,
             pages: Vec::new(),
             active_page_index: 0,
             default_timeout_ms: 10_000,
@@ -634,6 +637,27 @@ impl BrowserManager {
             Ok(Ok(_)) => true,
             Ok(Err(_)) | Err(_) => false,
         }
+    }
+
+    pub fn get_cdp_url(&self) -> &str {
+        &self.ws_url
+    }
+
+    /// Returns the Chrome debug server address as "host:port".
+    pub fn chrome_host_port(&self) -> &str {
+        let stripped = self
+            .ws_url
+            .strip_prefix("ws://")
+            .or_else(|| self.ws_url.strip_prefix("wss://"))
+            .unwrap_or(&self.ws_url);
+        stripped.split('/').next().unwrap_or(stripped)
+    }
+
+    pub fn active_target_id(&self) -> Result<&str, String> {
+        self.pages
+            .get(self.active_page_index)
+            .map(|p| p.target_id.as_str())
+            .ok_or_else(|| "No active page".to_string())
     }
 
     /// Returns true if this manager was connected via CDP (as opposed to local launch).

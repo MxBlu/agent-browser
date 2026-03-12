@@ -12,6 +12,7 @@ use super::cdp::types::{
 use super::cookies;
 use super::diff;
 use super::element::RefMap;
+use super::inspect_server::InspectServer;
 use super::interaction;
 use super::network::{self, DomainFilter, EventTracker};
 use super::policy::{ActionPolicy, ConfirmActions, PolicyResult};
@@ -96,6 +97,7 @@ pub struct DaemonState {
     pub har_recording: bool,
     pub har_entries: Vec<HarEntry>,
     pub confirm_actions: Option<ConfirmActions>,
+    pub inspect_server: Option<InspectServer>,
     pub routes: Vec<RouteEntry>,
     pub tracked_requests: Vec<TrackedRequest>,
     pub request_tracking: bool,
@@ -127,6 +129,7 @@ impl DaemonState {
             har_recording: false,
             har_entries: Vec::new(),
             confirm_actions: ConfirmActions::from_env(),
+            inspect_server: None,
             routes: Vec::new(),
             tracked_requests: Vec::new(),
             request_tracking: false,
@@ -567,6 +570,8 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         "launch" => handle_launch(cmd, state).await,
         "navigate" => handle_navigate(cmd, state).await,
         "url" => handle_url(state).await,
+        "cdp_url" => handle_cdp_url(state),
+        "inspect" => handle_inspect(state).await,
         "title" => handle_title(state).await,
         "content" => handle_content(state).await,
         "evaluate" => handle_evaluate(cmd, state).await,
@@ -1168,6 +1173,69 @@ async fn handle_url(state: &DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let url = mgr.get_url().await?;
     Ok(json!({ "url": url }))
+}
+
+fn handle_cdp_url(state: &DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    Ok(json!({ "cdpUrl": mgr.get_cdp_url() }))
+}
+
+async fn handle_inspect(state: &mut DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+
+    // Reuse existing inspect server if already running
+    if let Some(ref server) = state.inspect_server {
+        let url = format!("http://127.0.0.1:{}", server.port());
+        open_url_in_browser(&url);
+        return Ok(json!({ "opened": true, "url": url }));
+    }
+
+    let target_id = mgr.active_target_id()?.to_string();
+    let chrome_hp = mgr.chrome_host_port().to_string();
+
+    // Create a dedicated CDP session for DevTools (separate from the daemon's).
+    // This ensures DevTools gets fresh domain enablements (DOM.enable, CSS.enable, etc.)
+    // that trigger the initial state dumps Chrome sends to new sessions.
+    let attach_result: Value = mgr
+        .client
+        .send_command(
+            "Target.attachToTarget",
+            Some(json!({ "targetId": target_id, "flatten": true })),
+            None,
+        )
+        .await?;
+    let devtools_session_id = attach_result
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or("Failed to create DevTools CDP session")?
+        .to_string();
+
+    let proxy_handle = mgr.client.inspect_handle();
+
+    let server =
+        InspectServer::start(proxy_handle, devtools_session_id, chrome_hp).await?;
+    let url = format!("http://127.0.0.1:{}", server.port());
+    open_url_in_browser(&url);
+
+    state.inspect_server = Some(server);
+    Ok(json!({ "opened": true, "url": url }))
+}
+
+fn open_url_in_browser(url: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(url).spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "start", "", url])
+            .spawn();
+    }
 }
 
 async fn handle_title(state: &DaemonState) -> Result<Value, String> {

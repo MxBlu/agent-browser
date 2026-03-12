@@ -100,6 +100,23 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
     }
 
     if let Some(data) = &resp.data {
+        // Inspect response (check before generic URL handler since it also has a "url" field)
+        if action == Some("inspect") {
+            let opened = data
+                .get("opened")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if opened {
+                if let Some(url) = data.get("url").and_then(|v| v.as_str()) {
+                    println!("{} Opened DevTools: {}", color::success_indicator(), url);
+                } else {
+                    println!("{} Opened DevTools", color::success_indicator());
+                }
+            } else if let Some(err) = data.get("error").and_then(|v| v.as_str()) {
+                eprintln!("Could not open DevTools: {}", err);
+            }
+            return;
+        }
         // Navigation response
         if let Some(url) = data.get("url").and_then(|v| v.as_str()) {
             if let Some(title) = data.get("title").and_then(|v| v.as_str()) {
@@ -108,6 +125,10 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
                 return;
             }
             println!("{}", url);
+            return;
+        }
+        if let Some(cdp_url) = data.get("cdpUrl").and_then(|v| v.as_str()) {
+            println!("{}", cdp_url);
             return;
         }
         // Diff responses -- route by action to avoid fragile shape probing
@@ -1447,6 +1468,25 @@ Examples:
 "##
         }
 
+        // === Inspect ===
+        "inspect" => {
+            r##"
+agent-browser inspect - Open Chrome DevTools for the active page
+
+Starts a local WebSocket proxy and opens Chrome's DevTools frontend in your
+default browser. The proxy routes DevTools traffic through the daemon's
+existing CDP connection, so both DevTools and agent-browser commands work
+simultaneously.
+
+Usage: agent-browser inspect
+
+Examples:
+  agent-browser open example.com
+  agent-browser inspect          # opens DevTools in your browser
+  agent-browser click "Submit"   # commands still work while DevTools is open
+"##
+        }
+
         // === Get ===
         "get" => {
             r##"
@@ -1466,6 +1506,7 @@ Subcommands:
   count <selector>           Count matching elements
   box <selector>             Get bounding box (x, y, width, height)
   styles <selector>          Get computed styles of elements
+  cdp-url                    Get Chrome DevTools Protocol WebSocket URL
 
 Global Options:
   --json               Output as JSON
@@ -2351,7 +2392,7 @@ Navigation:
   reload                     Reload page
 
 Get Info:  agent-browser get <what> [selector]
-  text, html, value, attr <name>, title, url, count, box, styles
+  text, html, value, attr <name>, title, url, count, box, styles, cdp-url
 
 Check State:  agent-browser is <what> <selector>
   visible, enabled, checked
@@ -2392,6 +2433,7 @@ Debug:
   console [--clear]          View console logs
   errors [--clear]           View page errors
   highlight <sel>            Highlight element
+  inspect                    Open Chrome DevTools for the active page
 
 Auth Vault:
   auth save <name> [opts]    Save auth profile (--url, --username, --password/--password-stdin)

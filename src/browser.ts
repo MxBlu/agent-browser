@@ -167,6 +167,17 @@ export class BrowserManager {
     return this.browser !== null || this.isPersistentContext;
   }
 
+  getCdpUrl(): string | null {
+    if (this.cdpEndpoint) {
+      return this.cdpEndpoint;
+    }
+    try {
+      return this.browser?.wsEndpoint?.() ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Get enhanced snapshot with refs and cache the ref map
    */

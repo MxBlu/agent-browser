@@ -568,6 +568,9 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
         // === Close ===
         "close" | "quit" | "exit" => Ok(json!({ "id": id, "action": "close" })),
 
+        // === Inspect ===
+        "inspect" => Ok(json!({ "id": id, "action": "inspect" })),
+
         // === Authentication Vault ===
         "auth" => {
             let sub = rest.first().map(|s| s.as_ref());
@@ -1559,7 +1562,7 @@ fn parse_diff(rest: &[&str], id: &str, flags: &Flags) -> Result<Value, ParseErro
 
 fn parse_get(rest: &[&str], id: &str) -> Result<Value, ParseError> {
     const VALID: &[&str] = &[
-        "text", "html", "value", "attr", "url", "title", "count", "box", "styles",
+        "text", "html", "value", "attr", "url", "title", "count", "box", "styles", "cdp-url",
     ];
 
     match rest.first().copied() {
@@ -1596,6 +1599,7 @@ fn parse_get(rest: &[&str], id: &str) -> Result<Value, ParseError> {
             Ok(json!({ "id": id, "action": "getattribute", "selector": sel, "attribute": attr }))
         }
         Some("url") => Ok(json!({ "id": id, "action": "url" })),
+        Some("cdp-url") => Ok(json!({ "id": id, "action": "cdp_url" })),
         Some("title") => Ok(json!({ "id": id, "action": "title" })),
         Some("count") => {
             let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
@@ -1624,7 +1628,7 @@ fn parse_get(rest: &[&str], id: &str) -> Result<Value, ParseError> {
         }),
         None => Err(ParseError::MissingArguments {
             context: "get".to_string(),
-            usage: "get <text|html|value|attr|url|title|count|box|styles> [args...]",
+            usage: "get <text|html|value|attr|url|title|count|box|styles|cdp-url> [args...]",
         }),
     }
 }
