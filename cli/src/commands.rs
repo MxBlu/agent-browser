@@ -391,7 +391,7 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
                 return Ok(json!({ "id": id, "action": "waitforfunction", "expression": expr }));
             }
 
-            // Check for --text flag: wait --text "Welcome"
+            // Check for --text flag: wait --text "Welcome" [--timeout ms]
             if let Some(idx) = rest.iter().position(|&s| s == "--text" || s == "-t") {
                 let text = rest
                     .get(idx + 1)
@@ -399,7 +399,13 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
                         context: "wait --text".to_string(),
                         usage: "wait --text <text>",
                     })?;
-                return Ok(json!({ "id": id, "action": "wait", "text": text }));
+                let mut cmd = json!({ "id": id, "action": "wait", "text": text });
+                if let Some(t_idx) = rest.iter().position(|&s| s == "--timeout") {
+                    if let Some(Ok(ms)) = rest.get(t_idx + 1).map(|s| s.parse::<u64>()) {
+                        cmd["timeout"] = json!(ms);
+                    }
+                }
+                return Ok(cmd);
             }
 
             // Check for --download flag: wait --download [path] [--timeout ms]
@@ -1125,32 +1131,29 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
         }
 
         // === Clipboard ===
-        "clipboard" => {
-            const VALID: &[&str] = &["read", "write", "copy", "paste"];
-            match rest.first().copied() {
-                Some("read") | None => {
-                    Ok(json!({ "id": id, "action": "clipboard", "operation": "read" }))
-                }
-                Some("write") => {
-                    rest.get(1).ok_or_else(|| ParseError::MissingArguments {
-                        context: "clipboard write".to_string(),
-                        usage: "clipboard write <text>",
-                    })?;
-                    let text = rest[1..].join(" ");
-                    Ok(
-                        json!({ "id": id, "action": "clipboard", "operation": "write", "text": text }),
-                    )
-                }
-                Some("copy") => Ok(json!({ "id": id, "action": "clipboard", "operation": "copy" })),
-                Some("paste") => {
-                    Ok(json!({ "id": id, "action": "clipboard", "operation": "paste" }))
-                }
-                Some(sub) => Err(ParseError::UnknownSubcommand {
-                    subcommand: sub.to_string(),
-                    valid_options: VALID,
-                }),
+        "clipboard" => match rest.first().copied() {
+            Some("read") | None => {
+                Ok(json!({ "id": id, "action": "clipboard", "operation": "read" }))
             }
-        }
+            Some("write") => {
+                rest.get(1).ok_or_else(|| ParseError::MissingArguments {
+                    context: "clipboard write".to_string(),
+                    usage: "clipboard write <text>",
+                })?;
+                let text = rest[1..].join(" ");
+                Ok(
+                    json!({ "id": id, "action": "clipboard", "operation": "write", "text": text }),
+                )
+            }
+            Some("copy") => Ok(json!({ "id": id, "action": "clipboard", "operation": "copy" })),
+            Some("paste") => {
+                Ok(json!({ "id": id, "action": "clipboard", "operation": "paste" }))
+            }
+            Some(sub) => Err(ParseError::UnknownSubcommand {
+                subcommand: sub.to_string(),
+                valid_options: &["read", "write", "copy", "paste"],
+            }),
+        },
 
         // === State ===
         "state" => {
@@ -2796,6 +2799,16 @@ mod tests {
         let cmd = parse_command(&args("wait --text Welcome"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "wait");
         assert_eq!(cmd["text"], "Welcome");
+        assert!(cmd.get("timeout").is_none());
+    }
+
+    #[test]
+    fn test_wait_text_with_timeout() {
+        let cmd =
+            parse_command(&args("wait --text Welcome --timeout 5000"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "wait");
+        assert_eq!(cmd["text"], "Welcome");
+        assert_eq!(cmd["timeout"], 5000);
     }
 
     // === Clipboard Tests ===

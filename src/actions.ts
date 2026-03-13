@@ -966,10 +966,11 @@ async function handleWait(command: WaitCommand, browser: BrowserManager): Promis
   const page = browser.getPage();
 
   if (command.text) {
-    await page.getByText(command.text).waitFor({
-      state: 'visible',
-      timeout: command.timeout,
-    });
+    await page.waitForFunction(
+      (t: string) => (document.body.innerText || '').includes(t),
+      command.text,
+      { timeout: command.timeout }
+    );
   } else if (command.selector) {
     await page.waitForSelector(command.selector, {
       state: command.state ?? 'visible',
