@@ -1423,8 +1423,14 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     };
 
     state.ref_map.clear();
-    let tree =
-        snapshot::take_snapshot(&mgr.client, &session_id, &options, &mut state.ref_map).await?;
+    let tree = snapshot::take_snapshot(
+        &mgr.client,
+        &session_id,
+        &options,
+        &mut state.ref_map,
+        state.active_frame_id.as_deref(),
+    )
+    .await?;
 
     let url = mgr.get_url().await.unwrap_or_default();
 
@@ -1528,6 +1534,7 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
                 ..SnapshotOptions::default()
             },
             &mut state.ref_map,
+            state.active_frame_id.as_deref(),
         )
         .await?;
     }
@@ -2319,7 +2326,8 @@ async fn handle_diff_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Va
         ..SnapshotOptions::default()
     };
     let current =
-        snapshot::take_snapshot(&mgr.client, &session_id, &options, &mut state.ref_map).await?;
+        snapshot::take_snapshot(&mgr.client, &session_id, &options, &mut state.ref_map, None)
+            .await?;
 
     let baseline = cmd.get("baseline").and_then(|v| v.as_str());
 
@@ -2364,13 +2372,15 @@ async fn handle_diff_url(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     let session_id = mgr.active_session_id()?.to_string();
     let options = SnapshotOptions::default();
     let snap1 =
-        snapshot::take_snapshot(&mgr.client, &session_id, &options, &mut state.ref_map).await?;
+        snapshot::take_snapshot(&mgr.client, &session_id, &options, &mut state.ref_map, None)
+            .await?;
 
     // Navigate to URL2 and snapshot
     mgr.navigate(url2, wait_until).await?;
     state.ref_map.clear();
     let snap2 =
-        snapshot::take_snapshot(&mgr.client, &session_id, &options, &mut state.ref_map).await?;
+        snapshot::take_snapshot(&mgr.client, &session_id, &options, &mut state.ref_map, None)
+            .await?;
 
     let result = diff::diff_text(&snap1, &snap2);
     Ok(json!({
@@ -3481,8 +3491,63 @@ async fn handle_frame(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
 
     let frame_tree = &tree_result["frameTree"];
 
-    // If selector, resolve via JS to find the iframe's contentWindow
+    // If selector is a ref (@e1), resolve the iframe element from the ref map
     if let Some(sel) = selector {
+        if let Some(ref_id) = super::element::parse_ref(sel) {
+            let entry = state
+                .ref_map
+                .get(&ref_id)
+                .ok_or_else(|| format!("Unknown ref: {}", ref_id))?;
+            let backend_node_id = entry
+                .backend_node_id
+                .ok_or_else(|| format!("Ref {} has no backend node id", ref_id))?;
+
+            // Resolve the backend node to a remote object so we can run JS on it
+            let resolve_result: Value = mgr
+                .client
+                .send_command(
+                    "DOM.resolveNode",
+                    Some(json!({ "backendNodeId": backend_node_id })),
+                    Some(&session_id),
+                )
+                .await?;
+            let object_id = resolve_result
+                .get("object")
+                .and_then(|o| o.get("objectId"))
+                .and_then(|v| v.as_str())
+                .ok_or("Could not resolve ref to DOM object")?;
+
+            let js_result: Value = mgr
+                .client
+                .send_command(
+                    "Runtime.callFunctionOn",
+                    Some(json!({
+                        "objectId": object_id,
+                        "functionDeclaration": "function() { if (this.tagName === 'IFRAME' || this.tagName === 'FRAME') { return this.name || this.id || 'frame'; } return null; }",
+                        "returnByValue": true,
+                    })),
+                    Some(&session_id),
+                )
+                .await?;
+            let frame_name = js_result
+                .get("result")
+                .and_then(|r| r.get("value"))
+                .and_then(|v| v.as_str())
+                .ok_or("Ref does not point to an iframe element")?;
+
+            if let Some(frame_id) = find_frame(frame_tree, Some(frame_name), None) {
+                state.active_frame_id = Some(frame_id);
+                return Ok(json!({ "frame": frame_name }));
+            }
+            // Fall through to URL-based lookup using the frame name
+            if let Some(frame_id) = find_frame(frame_tree, None, Some(frame_name)) {
+                state.active_frame_id = Some(frame_id);
+                return Ok(json!({ "frame": frame_name }));
+            }
+            return Err("Frame not found for ref".to_string());
+        }
+
+        // CSS selector path
         let js = format!(
             r#"(() => {{
                 const el = document.querySelector({});
