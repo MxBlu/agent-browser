@@ -508,10 +508,14 @@ async fn find_cursor_interactive_elements(
 
         if (!hasCursorPointer && !hasOnClick && !hasTabIndex && !isEditable) continue;
 
-        // Skip elements that only inherit cursor:pointer from an ancestor
+        // Skip elements that only inherit cursor:pointer from an ancestor,
+        // but never skip semantic list/grid items since they are distinct click targets.
         if (hasCursorPointer && !hasOnClick && !hasTabIndex && !isEditable) {
-            var parent = el.parentElement;
-            if (parent && getComputedStyle(parent).cursor === 'pointer') continue;
+            var semanticItemTags = {'li':1,'tr':1,'td':1,'th':1,'dt':1,'dd':1};
+            if (!semanticItemTags[tagName]) {
+                var parent = el.parentElement;
+                if (parent && getComputedStyle(parent).cursor === 'pointer') continue;
+            }
         }
 
         var text = (el.textContent || '').trim().slice(0, 100);
