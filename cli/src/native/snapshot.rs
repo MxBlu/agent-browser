@@ -276,9 +276,20 @@ pub async fn take_snapshot(
     for (idx, node) in tree_nodes.iter().enumerate() {
         let role = node.role.as_str();
         let is_cursor_interactive = options.cursor
-            && node
+            && (node
                 .backend_node_id
-                .is_some_and(|bid| cursor_elements.contains_key(&bid));
+                .is_some_and(|bid| cursor_elements.contains_key(&bid))
+                // Also check the direct AX parent when it is an ignored wrapper
+                // (role == "") that has a cursor-interactive backendNodeId. This
+                // handles e.g. StaticText nodes inside a cursor:pointer <span>
+                // that Chrome marks as ignored in the accessibility tree.
+                || node.parent_idx.is_some_and(|pi| {
+                    let parent = &tree_nodes[pi];
+                    parent.role.is_empty()
+                        && parent
+                            .backend_node_id
+                            .is_some_and(|pbid| cursor_elements.contains_key(&pbid))
+                }));
 
         let should_ref = if INTERACTIVE_ROLES.contains(&role) {
             true
@@ -464,7 +475,7 @@ async fn find_cursor_interactive_elements(
     session_id: &str,
 ) -> Result<HashMap<i64, CursorElementInfo>, String> {
     // Single JS evaluation that matches the v0.19.0 Node.js findCursorInteractiveElements():
-    // - Uses querySelectorAll('*') to walk all elements
+    // - Uses querySelectorAll('*') to walk all elements (including same-origin iframes)
     // - Checks getComputedStyle(el).cursor === 'pointer'
     // - Checks onclick attribute/handler and tabindex
     // - Skips interactiveTags (a, button, input, select, textarea, details, summary)
@@ -472,9 +483,14 @@ async fn find_cursor_interactive_elements(
     // - Deduplicates inherited cursor:pointer from parent
     // - Skips empty text and zero-size elements
     // - Tags each matched element with data-__ab-ci for batch backendNodeId resolution
+    // The JS stores element references in window.__ab_ci_els so that Rust can
+    // resolve each to a backendNodeId via DOM.describeNode(objectId) without
+    // needing to traverse iframe boundaries with DOM.querySelectorAll.
+    // data-__ab-ci is still set on each element for cleanup purposes only.
     let js = r#"
 (function() {
     var results = [];
+    window.__ab_ci_els = [];
     if (!document.body) return results;
 
     var interactiveRoles = {
@@ -486,53 +502,85 @@ async fn find_cursor_interactive_elements(
         'a':1, 'button':1, 'input':1, 'select':1, 'textarea':1, 'details':1, 'summary':1
     };
 
-    var allElements = document.body.querySelectorAll('*');
-    for (var i = 0; i < allElements.length; i++) {
-        var el = allElements[i];
+    function processDoc(doc, win) {
+        if (!doc || !doc.body) return;
+        var allElements = doc.body.querySelectorAll('*');
+        for (var i = 0; i < allElements.length; i++) {
+            var el = allElements[i];
 
-        if (el.closest && el.closest('[hidden], [aria-hidden="true"]')) continue;
+            if (el.closest && el.closest('[hidden], [aria-hidden="true"]')) continue;
 
-        var tagName = el.tagName.toLowerCase();
-        if (interactiveTags[tagName]) continue;
+            var tagName = el.tagName.toLowerCase();
+            if (interactiveTags[tagName]) continue;
 
-        var role = el.getAttribute('role');
-        if (role && interactiveRoles[role.toLowerCase()]) continue;
+            var role = el.getAttribute('role');
+            if (role && interactiveRoles[role.toLowerCase()]) continue;
 
-        var computedStyle = getComputedStyle(el);
-        var hasCursorPointer = computedStyle.cursor === 'pointer';
-        var hasOnClick = el.hasAttribute('onclick') || el.onclick !== null;
-        var tabIndex = el.getAttribute('tabindex');
-        var hasTabIndex = tabIndex !== null && tabIndex !== '-1';
-        var ce = el.getAttribute('contenteditable');
-        var isEditable = ce === '' || ce === 'true';
+            var computedStyle = win.getComputedStyle(el);
+            var hasCursorPointer = computedStyle.cursor === 'pointer';
+            var hasOnClick = el.hasAttribute('onclick') || el.onclick !== null;
+            var tabIndex = el.getAttribute('tabindex');
+            var hasTabIndex = tabIndex !== null && tabIndex !== '-1';
+            var ce = el.getAttribute('contenteditable');
+            var isEditable = ce === '' || ce === 'true';
 
-        if (!hasCursorPointer && !hasOnClick && !hasTabIndex && !isEditable) continue;
+            if (!hasCursorPointer && !hasOnClick && !hasTabIndex && !isEditable) continue;
 
-        // Skip elements that only inherit cursor:pointer from an ancestor,
-        // but never skip semantic list/grid items since they are distinct click targets.
-        if (hasCursorPointer && !hasOnClick && !hasTabIndex && !isEditable) {
-            var semanticItemTags = {'li':1,'tr':1,'td':1,'th':1,'dt':1,'dd':1};
-            if (!semanticItemTags[tagName]) {
-                var parent = el.parentElement;
-                if (parent && getComputedStyle(parent).cursor === 'pointer') continue;
+            // Skip elements that only inherit cursor:pointer from an ancestor.
+            // Detect whether cursor:pointer is from the element's own CSS rule by
+            // temporarily forcing the parent's cursor to auto and checking if the
+            // element's cursor is still pointer (works for cross-origin stylesheets
+            // where cssRules is inaccessible).
+            if (hasCursorPointer && !hasOnClick && !hasTabIndex && !isEditable) {
+                var hasExplicitCursor = !!(el.style && el.style.cursor === 'pointer');
+                if (!hasExplicitCursor) {
+                    var parent = el.parentElement;
+                    if (parent) {
+                        var savedParentStyle = parent.getAttribute('style');
+                        parent.style.setProperty('cursor', 'auto', 'important');
+                        hasExplicitCursor = (win.getComputedStyle(el).cursor === 'pointer');
+                        if (savedParentStyle === null) {
+                            parent.removeAttribute('style');
+                        } else {
+                            parent.setAttribute('style', savedParentStyle);
+                        }
+                    } else {
+                        hasExplicitCursor = true;
+                    }
+                }
+                if (!hasExplicitCursor) continue;
             }
+
+            var text = (el.textContent || '').trim().slice(0, 100);
+
+            var rect = el.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) continue;
+
+            var idx = results.length;
+            el.setAttribute('data-__ab-ci', String(idx));
+            window.__ab_ci_els.push(el);
+            results.push({
+                text: text,
+                tagName: tagName,
+                hasOnClick: hasOnClick,
+                hasCursorPointer: hasCursorPointer,
+                hasTabIndex: hasTabIndex,
+                isEditable: isEditable
+            });
         }
 
-        var text = (el.textContent || '').trim().slice(0, 100);
-
-        var rect = el.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) continue;
-
-        el.setAttribute('data-__ab-ci', String(results.length));
-        results.push({
-            text: text,
-            tagName: tagName,
-            hasOnClick: hasOnClick,
-            hasCursorPointer: hasCursorPointer,
-            hasTabIndex: hasTabIndex,
-            isEditable: isEditable
-        });
+        // Recurse into same-origin iframes (cross-origin iframes throw SecurityError, caught below)
+        var iframes = doc.querySelectorAll('iframe');
+        for (var j = 0; j < iframes.length; j++) {
+            try {
+                var fd = iframes[j].contentDocument;
+                var fw = iframes[j].contentWindow;
+                if (fd && fw) processDoc(fd, fw);
+            } catch(e) {}
+        }
     }
+
+    processDoc(document, window);
     return results;
 })()
 "#;
@@ -559,46 +607,76 @@ async fn find_cursor_interactive_elements(
         return Ok(HashMap::new());
     }
 
-    // Batch-resolve backendNodeIds: use DOM.getDocument to get the root nodeId,
-    // then DOM.querySelectorAll to get all tagged elements in a single call.
-    let doc: Value = client
-        .send_command(
-            "DOM.getDocument",
-            Some(serde_json::json!({ "depth": 0 })),
+    // Resolve backendNodeIds by accessing window.__ab_ci_els (populated by the JS above).
+    // This avoids cross-frame DOM.querySelectorAll issues: elements from same-origin
+    // iframes are stored by reference in the main frame's global, so DOM.describeNode
+    // with each element's objectId works regardless of nesting depth.
+    let els_eval: Result<EvaluateResult, _> = client
+        .send_command_typed(
+            "Runtime.evaluate",
+            &EvaluateParams {
+                expression: "window.__ab_ci_els".to_string(),
+                return_by_value: Some(false),
+                await_promise: Some(false),
+            },
             Some(session_id),
         )
-        .await?;
+        .await;
 
-    let root_node_id = doc
-        .get("root")
-        .and_then(|r| r.get("nodeId"))
-        .and_then(|v| v.as_i64())
-        .ok_or("DOM.getDocument did not return root nodeId")?;
+    let array_oid = match els_eval {
+        Ok(ref eval) => eval.result.object_id.clone(),
+        Err(_) => None,
+    };
 
-    let query_result: Value = client
-        .send_command(
-            "DOM.querySelectorAll",
-            Some(serde_json::json!({
-                "nodeId": root_node_id,
-                "selector": "[data-__ab-ci]"
-            })),
-            Some(session_id),
-        )
-        .await?;
+    // Enumerate the element array and collect each element's objectId.
+    let elem_oids: Vec<(usize, String)> = if let Some(ref oid) = array_oid {
+        if let Ok(props) = client
+            .send_command(
+                "Runtime.getProperties",
+                Some(serde_json::json!({ "objectId": oid, "ownProperties": true })),
+                Some(session_id),
+            )
+            .await
+        {
+            props
+                .get("result")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|p| {
+                            // Only numeric keys (array indices); skip "length" etc.
+                            let idx: usize = p
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .and_then(|n| n.parse().ok())?;
+                            let elem_oid = p
+                                .get("value")
+                                .and_then(|v| v.get("objectId"))
+                                .and_then(|id| id.as_str())
+                                .map(|s| s.to_string())?;
+                            Some((idx, elem_oid))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
 
-    let node_ids: Vec<i64> = query_result
-        .get("nodeIds")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
-        .unwrap_or_default();
-
-    // Resolve backendNodeIds for each DOM node using concurrent CDP calls.
-    let describe_futures: Vec<_> = node_ids
+    // Resolve each element's backendNodeId via DOM.describeNode(objectId).
+    // Use depth:1 to also capture text-node children: Chrome's AX tree sets
+    // backendDOMNodeId on StaticText nodes to the TEXT NODE's backendNodeId (not
+    // the parent element's), so we add text-node child backendNodeIds too so that
+    // cursor_elements matches both the element and its contained text.
+    let describe_futures: Vec<_> = elem_oids
         .iter()
-        .map(|&node_id| {
+        .map(|(_, oid)| {
             client.send_command(
                 "DOM.describeNode",
-                Some(serde_json::json!({ "nodeId": node_id })),
+                Some(serde_json::json!({ "objectId": oid, "depth": 1 })),
                 Some(session_id),
             )
         })
@@ -606,35 +684,65 @@ async fn find_cursor_interactive_elements(
 
     let describe_results = futures_util::future::join_all(describe_futures).await;
 
-    // Build a map from data-__ab-ci index to backendNodeId.
+    // Build a map from array index to backendNodeId.
+    // Also collect text-node children so their backendNodeIds can be added to
+    // cursor_elements (matching AX StaticText backendDOMNodeId values).
     let mut idx_to_backend: HashMap<usize, i64> = HashMap::new();
-    for desc in describe_results.into_iter().flatten() {
-        let backend_id = desc
-            .get("node")
-            .and_then(|n| n.get("backendNodeId"))
-            .and_then(|v| v.as_i64());
-        let ci_attr = desc
-            .get("node")
-            .and_then(|n| n.get("attributes"))
-            .and_then(|a| a.as_array())
-            .and_then(|attrs| {
-                // attributes is a flat array: [name, value, name, value, ...]
-                attrs
-                    .iter()
-                    .enumerate()
-                    .find(|(_, v)| v.as_str() == Some("data-__ab-ci"))
-                    .and_then(|(i, _)| attrs.get(i + 1))
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse::<usize>().ok())
-            });
-        if let (Some(bid), Some(idx)) = (backend_id, ci_attr) {
-            idx_to_backend.insert(idx, bid);
+    // text_node_bids: additional backendNodeIds from text-node children, mapped
+    // to the same element index so they share the same CursorElementInfo.
+    let mut text_node_bids: Vec<(usize, i64)> = Vec::new();
+    for ((idx, _), desc_result) in elem_oids.iter().zip(describe_results.into_iter()) {
+        if let Ok(desc) = desc_result {
+            let node = match desc.get("node") {
+                Some(n) => n,
+                None => continue,
+            };
+            if let Some(bid) = node.get("backendNodeId").and_then(|v| v.as_i64()) {
+                idx_to_backend.insert(*idx, bid);
+            }
+            // Collect text-node children (nodeType 3)
+            if let Some(children) = node.get("children").and_then(|c| c.as_array()) {
+                for child in children {
+                    let node_type = child.get("nodeType").and_then(|t| t.as_i64());
+                    if node_type == Some(3) {
+                        if let Some(child_bid) =
+                            child.get("backendNodeId").and_then(|v| v.as_i64())
+                        {
+                            text_node_bids.push((*idx, child_bid));
+                        }
+                    }
+                }
+            }
         }
     }
 
-    // Clean up the data attributes we injected for backendNodeId resolution.
+    // Release the element array remote object.
+    if let Some(ref oid) = array_oid {
+        let _ = client
+            .send_command(
+                "Runtime.releaseObject",
+                Some(serde_json::json!({ "objectId": oid })),
+                Some(session_id),
+            )
+            .await;
+        // Also clear the global to avoid leaking element references.
+        let _ = client
+            .send_command_typed::<EvaluateParams, EvaluateResult>(
+                "Runtime.evaluate",
+                &EvaluateParams {
+                    expression: "delete window.__ab_ci_els".to_string(),
+                    return_by_value: Some(true),
+                    await_promise: Some(false),
+                },
+                Some(session_id),
+            )
+            .await;
+    }
+
+    // Clean up the data attributes we injected for backendNodeId resolution,
+    // including inside any same-origin iframes that were traversed.
     let cleanup_js =
-        r#"(function(){ var els = document.querySelectorAll('[data-__ab-ci]'); for (var i = 0; i < els.length; i++) els[i].removeAttribute('data-__ab-ci'); return els.length; })()"#.to_string();
+        r#"(function(){ function clean(doc){ var els = doc.querySelectorAll('[data-__ab-ci]'); for (var i = 0; i < els.length; i++) els[i].removeAttribute('data-__ab-ci'); var iframes = doc.querySelectorAll('iframe'); for (var j = 0; j < iframes.length; j++) { try { if (iframes[j].contentDocument) clean(iframes[j].contentDocument); } catch(e) {} } } clean(document); })()"#.to_string();
     if let Err(e) = client
         .send_command_typed::<EvaluateParams, EvaluateResult>(
             "Runtime.evaluate",
@@ -715,6 +823,61 @@ async fn find_cursor_interactive_elements(
         }
     }
 
+    // Also insert text-node child backendNodeIds so that AX StaticText nodes
+    // (whose backendDOMNodeId Chrome sets to the text node, not the parent element)
+    // are matched as cursor-interactive.
+    for (parent_idx, text_bid) in &text_node_bids {
+        if let Some(elem) = elements.get(*parent_idx) {
+            let has_cursor_pointer = elem
+                .get("hasCursorPointer")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let has_on_click = elem
+                .get("hasOnClick")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let is_editable = elem
+                .get("isEditable")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let has_tab_index = elem
+                .get("hasTabIndex")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let kind = if has_cursor_pointer || has_on_click {
+                "clickable"
+            } else if is_editable {
+                "editable"
+            } else {
+                "focusable"
+            };
+            let mut hints: Vec<String> = Vec::new();
+            if has_cursor_pointer {
+                hints.push("cursor:pointer".to_string());
+            }
+            if has_on_click {
+                hints.push("onclick".to_string());
+            }
+            if has_tab_index {
+                hints.push("tabindex".to_string());
+            }
+            if is_editable {
+                hints.push("contenteditable".to_string());
+            }
+            let text = elem
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            map.entry(*text_bid).or_insert(CursorElementInfo {
+                kind: kind.to_string(),
+                hints,
+                text,
+            });
+        }
+    }
+
     Ok(map)
 }
 
@@ -741,7 +904,10 @@ fn build_tree(nodes: &[AXNode]) -> (Vec<TreeNode>, Vec<usize>) {
                 disabled: None,
                 required: None,
                 value_text: None,
-                backend_node_id: None,
+                // Preserve backendNodeId even for ignored nodes so that children can
+                // inherit cursor-interactive status from a cursor:pointer parent that
+                // Chrome marks as ignored (e.g. a plain <span class="linkfield">).
+                backend_node_id: node.backend_d_o_m_node_id,
                 children: Vec::new(),
                 parent_idx: None,
                 has_ref: false,
